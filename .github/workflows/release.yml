@@ -3,8 +3,12 @@ name: Build and Release FFmpeg
 on:
   workflow_dispatch:
 
+# Required permission to create tags and releases via the GitHub CLI
+permissions:
+  contents: write
+
 jobs:
-  build-and-test:
+  build-and-release:
     runs-on: ubuntu-latest
 
     steps:
@@ -14,7 +18,6 @@ jobs:
       - name: Set up Environment Variables
         run: |
           # GitHub Actions' ubuntu-latest already provides the Android SDK and NDK.
-          # We just need to map them to the variables expected by your script.
           echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           
           # Find the latest installed NDK version dynamically
@@ -31,6 +34,7 @@ jobs:
 
       - name: Build FFmpeg for Android
         run: |
+          # Executes your script to build FFmpeg for x86, x86_64, armeabi-v7a, arm64-v8a
           ./ffmpeg-android-maker.sh
 
       - name: Test FFmpeg executable on Android Emulator
@@ -41,20 +45,19 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           script: |
-            # 1. Create a workspace directory on the emulator
+            # Create a workspace directory on the emulator
             adb shell mkdir -p /data/local/tmp/ffmpeg_test
             
-            # 2. Push the compiled shared libraries (.so) to the emulator
+            # Push the compiled shared libraries (.so) to the emulator
             adb push output/lib/x86_64/. /data/local/tmp/ffmpeg_test/lib/
             
-            # 3. Push the compiled executable
+            # Push the compiled executable
             adb push build/ffmpeg/x86_64/bin/ffmpeg /data/local/tmp/ffmpeg_test/
             
-            # 4. Make the binary executable
+            # Make the binary executable
             adb shell chmod +x /data/local/tmp/ffmpeg_test/ffmpeg
             
-            # 5. Run the executable and print its version.
-            # We must specify LD_LIBRARY_PATH so Android's linker finds our pushed .so files
+            # Run the executable and print its version
             adb shell "LD_LIBRARY_PATH=/data/local/tmp/ffmpeg_test/lib /data/local/tmp/ffmpeg_test/ffmpeg -version"
 
       - name: Package Output Artifacts
@@ -65,9 +68,19 @@ jobs:
           # Compress the generated standalone binaries (ffmpeg, ffprobe) for all ABIs
           tar -czvf ffmpeg-android-executables.tar.gz build/ffmpeg/*/bin/
 
-      - name: Upload Artifacts to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ffmpeg-android-output.tar.gz
-            ffmpeg-android-executables.tar.gz
+      - name: Generate Release Tag
+        id: date
+        # Generates a tag like '2023.10.27-1430'
+        run: echo "RELEASE_TAG=$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Uses the GitHub CLI to create the release, tag the commit, and upload the tar files
+          gh release create ${{ env.RELEASE_TAG }} \
+            ffmpeg-android-output.tar.gz \
+            ffmpeg-android-executables.tar.gz \
+            --title "FFmpeg Android Build ${{ env.RELEASE_TAG }}" \
+            --notes "Automated FFmpeg build for Android from commit ${{ github.sha }}" \
+            --target ${{ github.sha }}
